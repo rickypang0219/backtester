@@ -84,9 +84,6 @@ class BackTester:
                 pl.col("returns").cum_sum().alias("benchmark_cumPnL"),
             ]
         )
-        trade_info = trade_info.with_columns(
-            [pl.col("returns").cum_sum().alias("benchmark_cumPnL")]
-        )
         return trade_info
 
     def _compute_trade_statistics(
@@ -114,9 +111,12 @@ class BackTester:
             .group_by("humanized_timestamp")
             .agg(pl.col("PnL").sum().alias("aggPnL"))
         )
-        mean = trade_info["aggPnL"].drop_nulls().mean()
-        sd = trade_info["aggPnL"].drop_nulls().std()
-        if mean and sd:
+        agg_pnl = trade_info["aggPnL"].drop_nulls().to_list()
+        if agg_pnl:
+            mean = np.mean(agg_pnl)
+            sd = np.std(agg_pnl, ddof=1)
+            if sd == 0:
+                return 0
             return (mean / sd) * np.sqrt(trading_days)
         return 0
 
@@ -128,17 +128,26 @@ class BackTester:
         slope = model.coef_[0]
         return slope
 
+    def _compute_max_draw_down(self, trade_info: pl.DataFrame):
+        returns = trade_info.select("PnL").drop_nulls().to_numpy()
+        cum_prod_returns = np.cumprod(1 + returns)
+        running_max = np.maximum.accumulate(cum_prod_returns)
+        drawdown = cum_prod_returns / running_max - 1
+        return np.min(drawdown)
+
     def print_trade_summary_stats(self, rolling_window: int, multiplier: float) -> None:
         trade_info = self._compute_trade_statistics(rolling_window, multiplier)
         sharpe: float = self.compute_sharpe_ratio(trade_info, 365)
         beta = self._compute_beta(trade_info)
+        mdd = self._compute_max_draw_down(trade_info)
         print(
             f'### Trade Summary Statistics ### \n'
             f'Params Set {rolling_window, multiplier} \n'
             f"Strategy Cum PnL: {trade_info['strategy_cumPnL'][-1]:.3f} \n"
             f"Benchmark Cum PnL {trade_info['benchmark_cumPnL'][-1]:.3f} \n"
             f"Annualized Sharpe Ratio: {sharpe:.3f} \n"
-            f"Beta: {beta:.3f} \n"
+            f"Market Beta: {beta:.3f} \n"
+            f"Maximum Drawdown: {mdd * 100:.0f}% \n"
             f"################################ \n"
         )
 
