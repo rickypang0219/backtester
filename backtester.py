@@ -41,6 +41,19 @@ class BackTester:
     def _print_factors(self) -> None:
         print(self.factors)
 
+    @staticmethod
+    @njit
+    def _update_positions(
+        position: np.ndarray,
+        long_entry: np.ndarray,
+        short_entry: np.ndarray,
+        long_exit: np.ndarray,
+        short_exit: np.ndarray,
+    ) -> None:
+        return update_positions(
+            position, long_entry, short_entry, long_exit, short_exit
+        )
+
     def _z_score_strategy(self, rolling_window: int, multiplier: float) -> pl.DataFrame:
         trade_info = pl.DataFrame()
         rolling_mean = (
@@ -61,7 +74,7 @@ class BackTester:
         short_exit = (z_score >= 0).astype(int)
 
         position: np.ndarray = np.zeros(len(self.factors["timestamp"]))
-        update_positions(position, long_entry, short_entry, long_exit, short_exit)
+        self._update_positions(position, long_entry, short_entry, long_exit, short_exit)
         trade_info = trade_info.with_columns([pl.Series("position", position)])
         return trade_info
 
@@ -218,7 +231,7 @@ class BackTester:
         ax.set_xlabel("Rolling Windows")
         ax.set_ylabel("Multipliers")
         ax.set_title("Heatmap of Params Set")
-        plt.show()
+        # plt.show()
 
     def plot_returns(self, trade_info: pl.DataFrame) -> None:
         trade_info = self._convert_humanized_timestamp(trade_info)
