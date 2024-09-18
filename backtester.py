@@ -4,6 +4,33 @@ import matplotlib.pyplot as plt
 from multiprocessing import Pool
 import seaborn as sns
 from sklearn.linear_model import LinearRegression
+from numba import njit
+
+
+@njit
+def update_positions(
+    position: np.ndarray,
+    long_entry: np.ndarray,
+    short_entry: np.ndarray,
+    long_exit: np.ndarray,
+    short_exit: np.ndarray,
+) -> None:
+    for i in range(1, len(position)):
+        if position[i - 1] == 0:
+            if long_entry[i]:
+                position[i] = 1
+            elif short_entry[i]:
+                position[i] = -1
+        elif position[i - 1] == 1:
+            if long_exit[i]:
+                position[i] = 0
+            else:
+                position[i] = 1
+        elif position[i - 1] == -1:
+            if short_exit[i]:
+                position[i] = 0
+            else:
+                position[i] = -1
 
 
 class BackTester:
@@ -14,38 +41,40 @@ class BackTester:
     def _print_factors(self) -> None:
         print(self.factors)
 
+    @staticmethod
+    @njit
+    def _update_positions(
+        position: np.ndarray,
+        long_entry: np.ndarray,
+        short_entry: np.ndarray,
+        long_exit: np.ndarray,
+        short_exit: np.ndarray,
+    ) -> None:
+        return update_positions(
+            position, long_entry, short_entry, long_exit, short_exit
+        )
+
     def _z_score_strategy(self, rolling_window: int, multiplier: float) -> pl.DataFrame:
         trade_info = pl.DataFrame()
-        if self.factors is None:
-            raise ValueError("factor_df is None")
-        rolling_mean = self.factors["factor"].rolling_mean(window_size=rolling_window)
-        rolling_std = self.factors["factor"].rolling_std(window_size=rolling_window)
-        z_score = (self.factors["factor"] - rolling_mean) / rolling_std
+        rolling_mean = (
+            self.factors["factor"].rolling_mean(window_size=rolling_window).to_numpy()
+        )
+        rolling_std = (
+            self.factors["factor"].rolling_std(window_size=rolling_window).to_numpy()
+        )
+        z_score = (self.factors["factor"].to_numpy() - rolling_mean) / rolling_std
 
         trade_info = trade_info.with_columns(
             self.factors["timestamp"].alias("timestamp")
         )
 
-        long_entry = (z_score > multiplier).cast(pl.Int64)
-        long_exit = (z_score <= 0).cast(pl.Int64)
-
-        short_entry = (z_score < -1 * multiplier).cast(pl.Int64) * -1
-        short_exit = (z_score >= 0).cast(pl.Int64)
+        long_entry = (z_score > multiplier).astype(int)
+        long_exit = (z_score <= 0).astype(int)
+        short_entry = (z_score < -1 * multiplier).astype(int) * -1
+        short_exit = (z_score >= 0).astype(int)
 
         position: np.ndarray = np.zeros(len(self.factors["timestamp"]))
-        for i in range(1, len(position)):
-            if long_entry[i]:
-                position[i] = 1
-            elif short_entry[i]:
-                position[i] = -1
-            else:
-                position[i] = position[i - 1]
-
-            if (position[i] == 1 and long_exit[i]) or (
-                position[i] == -1 and short_exit[i]
-            ):
-                position[i] = 0
-
+        self._update_positions(position, long_entry, short_entry, long_exit, short_exit)
         trade_info = trade_info.with_columns([pl.Series("position", position)])
         return trade_info
 
@@ -53,7 +82,7 @@ class BackTester:
         trade_info = trade_info.with_columns(
             [
                 (
-                    abs((pl.col("position") - pl.col("position").shift(1)))
+                    abs(pl.col("position") - pl.col("position").shift(1))
                     * self.TRANSACTION_COST
                 ).alias("trans_cost")
             ]
@@ -128,26 +157,35 @@ class BackTester:
         slope = model.coef_[0]
         return slope
 
-    def _compute_max_draw_down(self, trade_info: pl.DataFrame):
+    def _compute_max_drawdown(self, trade_info: pl.DataFrame):
         returns = trade_info.select("PnL").drop_nulls().to_numpy()
         cum_prod_returns = np.cumprod(1 + returns)
         running_max = np.maximum.accumulate(cum_prod_returns)
         drawdown = cum_prod_returns / running_max - 1
         return np.min(drawdown)
 
+    def _compute_long_short_ratio(self, trade_info: pl.DataFrame) -> float | None:
+        long_count = trade_info.filter(pl.col("position") == 1).shape[0]
+        short_count = trade_info.filter(pl.col("position") == -1).shape[0]
+        if (short_count != 0) and (long_count != 0):
+            return long_count / short_count
+        return None
+
     def print_trade_summary_stats(self, rolling_window: int, multiplier: float) -> None:
         trade_info = self._compute_trade_statistics(rolling_window, multiplier)
         sharpe: float = self.compute_sharpe_ratio(trade_info, 365)
         beta = self._compute_beta(trade_info)
-        mdd = self._compute_max_draw_down(trade_info)
+        mdd = self._compute_max_drawdown(trade_info)
+        ls_ratio = self._compute_long_short_ratio(trade_info)
         print(
             f'### Trade Summary Statistics ### \n'
             f'Params Set {rolling_window, multiplier} \n'
             f"Strategy Cum PnL: {trade_info['strategy_cumPnL'][-1]:.3f} \n"
             f"Benchmark Cum PnL {trade_info['benchmark_cumPnL'][-1]:.3f} \n"
-            f"Annualized Sharpe Ratio: {sharpe:.3f} \n"
+            f"Annualized Sharpe: {sharpe:.3f} \n"
             f"Market Beta: {beta:.3f} \n"
             f"Maximum Drawdown: {mdd * 100:.0f}% \n"
+            f"Long Short Ratio: {ls_ratio:.3f} \n"
             f"################################ \n"
         )
 
@@ -193,11 +231,10 @@ class BackTester:
         ax.set_xlabel("Rolling Windows")
         ax.set_ylabel("Multipliers")
         ax.set_title("Heatmap of Params Set")
-        plt.show()
+        # plt.show()
 
     def plot_returns(self, trade_info: pl.DataFrame) -> None:
         trade_info = self._convert_humanized_timestamp(trade_info)
-        print(trade_info)
         trade_info_pd = trade_info.to_pandas()
         plt.title("Cumulative PnL of Market VS Strategy")
         plt.plot(
@@ -217,14 +254,10 @@ class BackTester:
 
 
 if __name__ == "__main__":
-    factors_df = pl.read_csv("pi_coinbase.csv")
-    factors_df = factors_df.sort("timestamp")
-    factors_df = factors_df.with_columns(
-        (pl.col("coinbase_spot") / pl.col("binance_perp")).alias("factor")
-    )
-    factors_df = factors_df.with_columns((pl.col("binance_perp").alias("price")))
+    factors_df = pl.read_csv("factors.csv")
     backtester = BackTester(factors_df)
-    # trade_info = backtester._compute_trade_statistics(220, 2.8)
+    # backtester._z_score_strategy(220, 2.8)
+    trade_info = backtester._compute_trade_statistics(220, 2.8)
     backtester.print_trade_summary_stats(220, 2.8)
     rolling_windows = (
         [i for i in range(10, 101, 10)]
