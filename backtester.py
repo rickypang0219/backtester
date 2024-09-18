@@ -154,7 +154,7 @@ class BackTester:
             f'Params Set {rolling_window, multiplier} \n'
             f"Strategy Cum PnL: {trade_info['strategy_cumPnL'][-1]:.3f} \n"
             f"Benchmark Cum PnL {trade_info['benchmark_cumPnL'][-1]:.3f} \n"
-            f"Annualized Sharpe Ratio: {sharpe:.3f} \n"
+            f"Annualized Sharpe: {sharpe:.3f} \n"
             f"Market Beta: {beta:.3f} \n"
             f"Maximum Drawdown: {mdd * 100:.0f}% \n"
             f"Long Short Ratio: {ls_ratio:.3f} \n"
@@ -207,7 +207,6 @@ class BackTester:
 
     def plot_returns(self, trade_info: pl.DataFrame) -> None:
         trade_info = self._convert_humanized_timestamp(trade_info)
-        print(trade_info)
         trade_info_pd = trade_info.to_pandas()
         plt.title("Cumulative PnL of Market VS Strategy")
         plt.plot(
@@ -230,12 +229,13 @@ if __name__ == "__main__":
     factors_df = pl.read_csv("factors.csv")
     backtester = BackTester(factors_df)
     trade_info = backtester._compute_trade_statistics(220, 2.8)
+    backtester.plot_returns(trade_info)
     backtester.print_trade_summary_stats(220, 2.8)
-    rolling_windows = (
-        [i for i in range(10, 101, 10)]
-        + [i for i in range(100, 501, 20)]
-        + [i for i in range(500, 1001, 25)]
-    )
-    rolling_windows = np.array(rolling_windows)
-    multipliers = np.arange(0, 4.1, 0.2)
-    backtester.optimize_params_and_plot_heatmap(rolling_windows, multipliers)
+    # rolling_windows = (
+    #     [i for i in range(10, 101, 10)]
+    #     + [i for i in range(100, 501, 20)]
+    #     + [i for i in range(500, 1001, 25)]
+    # )
+    # rolling_windows = np.array(rolling_windows)
+    # multipliers = np.arange(0, 4.1, 0.2)
+    # backtester.optimize_params_and_plot_heatmap(rolling_windows, multipliers)
