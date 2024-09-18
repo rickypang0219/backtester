@@ -1,10 +1,36 @@
-from joblib.logger import short_format_time
 import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
 from multiprocessing import Pool
 import seaborn as sns
 from sklearn.linear_model import LinearRegression
+from numba import njit
+
+
+@njit
+def update_positions(
+    position: np.ndarray,
+    long_entry: np.ndarray,
+    short_entry: np.ndarray,
+    long_exit: np.ndarray,
+    short_exit: np.ndarray,
+) -> None:
+    for i in range(1, len(position)):
+        if position[i - 1] == 0:
+            if long_entry[i]:
+                position[i] = 1
+            elif short_entry[i]:
+                position[i] = -1
+        elif position[i - 1] == 1:
+            if long_exit[i]:
+                position[i] = 0
+            else:
+                position[i] = 1
+        elif position[i - 1] == -1:
+            if short_exit[i]:
+                position[i] = 0
+            else:
+                position[i] = -1
 
 
 class BackTester:
@@ -17,8 +43,6 @@ class BackTester:
 
     def _z_score_strategy(self, rolling_window: int, multiplier: float) -> pl.DataFrame:
         trade_info = pl.DataFrame()
-        if self.factors is None:
-            raise ValueError("factor_df is None")
         rolling_mean = (
             self.factors["factor"].rolling_mean(window_size=rolling_window).to_numpy()
         )
@@ -35,23 +59,9 @@ class BackTester:
         long_exit = (z_score <= 0).astype(int)
         short_entry = (z_score < -1 * multiplier).astype(int) * -1
         short_exit = (z_score >= 0).astype(int)
+
         position: np.ndarray = np.zeros(len(self.factors["timestamp"]))
-        for i in range(1, len(position)):
-            if position[i - 1] == 0:
-                if long_entry[i]:
-                    position[i] = 1
-                elif short_entry[i]:
-                    position[i] = -1
-            elif position[i - 1] == 1:
-                if long_exit[i]:
-                    position[i] = 0
-                else:
-                    position[i] = 1
-            elif position[i - 1] == -1:
-                if short_exit[i]:
-                    position[i] = 0
-                else:
-                    position[i] = -1
+        update_positions(position, long_entry, short_entry, long_exit, short_exit)
         trade_info = trade_info.with_columns([pl.Series("position", position)])
         return trade_info
 
@@ -233,14 +243,14 @@ class BackTester:
 if __name__ == "__main__":
     factors_df = pl.read_csv("factors.csv")
     backtester = BackTester(factors_df)
-    backtester._z_score_strategy(220, 2.8)
-    # trade_info = backtester._compute_trade_statistics(220, 2.8)
-    # backtester.print_trade_summary_stats(220, 2.8)
-    # rolling_windows = (
-    #     [i for i in range(10, 101, 10)]
-    #     + [i for i in range(100, 501, 20)]
-    #     + [i for i in range(500, 1001, 25)]
-    # )
-    # rolling_windows = np.array(rolling_windows)
-    # multipliers = np.arange(0, 4.1, 0.2)
-    # backtester.optimize_params_and_plot_heatmap(rolling_windows, multipliers)
+    # backtester._z_score_strategy(220, 2.8)
+    trade_info = backtester._compute_trade_statistics(220, 2.8)
+    backtester.print_trade_summary_stats(220, 2.8)
+    rolling_windows = (
+        [i for i in range(10, 101, 10)]
+        + [i for i in range(100, 501, 20)]
+        + [i for i in range(500, 1001, 25)]
+    )
+    rolling_windows = np.array(rolling_windows)
+    multipliers = np.arange(0, 4.1, 0.2)
+    backtester.optimize_params_and_plot_heatmap(rolling_windows, multipliers)
