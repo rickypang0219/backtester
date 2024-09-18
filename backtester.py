@@ -1,3 +1,4 @@
+from joblib.logger import short_format_time
 import polars as pl
 import numpy as np
 import matplotlib.pyplot as plt
@@ -128,18 +129,26 @@ class BackTester:
         slope = model.coef_[0]
         return slope
 
-    def _compute_max_draw_down(self, trade_info: pl.DataFrame):
+    def _compute_max_drawdown(self, trade_info: pl.DataFrame):
         returns = trade_info.select("PnL").drop_nulls().to_numpy()
         cum_prod_returns = np.cumprod(1 + returns)
         running_max = np.maximum.accumulate(cum_prod_returns)
         drawdown = cum_prod_returns / running_max - 1
         return np.min(drawdown)
 
+    def _compute_long_short_ratio(self, trade_info: pl.DataFrame) -> float | None:
+        long_count = trade_info.filter(pl.col("position") == 1).shape[0]
+        short_count = trade_info.filter(pl.col("position") == -1).shape[0]
+        if (short_count != 0) and (long_count != 0):
+            return long_count / short_count
+        return None
+
     def print_trade_summary_stats(self, rolling_window: int, multiplier: float) -> None:
         trade_info = self._compute_trade_statistics(rolling_window, multiplier)
         sharpe: float = self.compute_sharpe_ratio(trade_info, 365)
         beta = self._compute_beta(trade_info)
-        mdd = self._compute_max_draw_down(trade_info)
+        mdd = self._compute_max_drawdown(trade_info)
+        ls_ratio = self._compute_long_short_ratio(trade_info)
         print(
             f'### Trade Summary Statistics ### \n'
             f'Params Set {rolling_window, multiplier} \n'
@@ -148,6 +157,7 @@ class BackTester:
             f"Annualized Sharpe Ratio: {sharpe:.3f} \n"
             f"Market Beta: {beta:.3f} \n"
             f"Maximum Drawdown: {mdd * 100:.0f}% \n"
+            f"Long Short Ratio: {ls_ratio:.3f} \n"
             f"################################ \n"
         )
 
@@ -217,14 +227,9 @@ class BackTester:
 
 
 if __name__ == "__main__":
-    factors_df = pl.read_csv("pi_coinbase.csv")
-    factors_df = factors_df.sort("timestamp")
-    factors_df = factors_df.with_columns(
-        (pl.col("coinbase_spot") / pl.col("binance_perp")).alias("factor")
-    )
-    factors_df = factors_df.with_columns((pl.col("binance_perp").alias("price")))
+    factors_df = pl.read_csv("factors.csv")
     backtester = BackTester(factors_df)
-    # trade_info = backtester._compute_trade_statistics(220, 2.8)
+    trade_info = backtester._compute_trade_statistics(220, 2.8)
     backtester.print_trade_summary_stats(220, 2.8)
     rolling_windows = (
         [i for i in range(10, 101, 10)]
