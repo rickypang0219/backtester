@@ -19,34 +19,39 @@ class BackTester:
         trade_info = pl.DataFrame()
         if self.factors is None:
             raise ValueError("factor_df is None")
-        rolling_mean = self.factors["factor"].rolling_mean(window_size=rolling_window)
-        rolling_std = self.factors["factor"].rolling_std(window_size=rolling_window)
-        z_score = (self.factors["factor"] - rolling_mean) / rolling_std
+        rolling_mean = (
+            self.factors["factor"].rolling_mean(window_size=rolling_window).to_numpy()
+        )
+        rolling_std = (
+            self.factors["factor"].rolling_std(window_size=rolling_window).to_numpy()
+        )
+        z_score = (self.factors["factor"].to_numpy() - rolling_mean) / rolling_std
 
         trade_info = trade_info.with_columns(
             self.factors["timestamp"].alias("timestamp")
         )
 
-        long_entry = (z_score > multiplier).cast(pl.Int64)
-        long_exit = (z_score <= 0).cast(pl.Int64)
-
-        short_entry = (z_score < -1 * multiplier).cast(pl.Int64) * -1
-        short_exit = (z_score >= 0).cast(pl.Int64)
-
+        long_entry = (z_score > multiplier).astype(int)
+        long_exit = (z_score <= 0).astype(int)
+        short_entry = (z_score < -1 * multiplier).astype(int) * -1
+        short_exit = (z_score >= 0).astype(int)
         position: np.ndarray = np.zeros(len(self.factors["timestamp"]))
         for i in range(1, len(position)):
-            if long_entry[i]:
-                position[i] = 1
-            elif short_entry[i]:
-                position[i] = -1
-            else:
-                position[i] = position[i - 1]
-
-            if (position[i] == 1 and long_exit[i]) or (
-                position[i] == -1 and short_exit[i]
-            ):
-                position[i] = 0
-
+            if position[i - 1] == 0:
+                if long_entry[i]:
+                    position[i] = 1
+                elif short_entry[i]:
+                    position[i] = -1
+            elif position[i - 1] == 1:
+                if long_exit[i]:
+                    position[i] = 0
+                else:
+                    position[i] = 1
+            elif position[i - 1] == -1:
+                if short_exit[i]:
+                    position[i] = 0
+                else:
+                    position[i] = -1
         trade_info = trade_info.with_columns([pl.Series("position", position)])
         return trade_info
 
@@ -54,7 +59,7 @@ class BackTester:
         trade_info = trade_info.with_columns(
             [
                 (
-                    abs((pl.col("position") - pl.col("position").shift(1)))
+                    abs(pl.col("position") - pl.col("position").shift(1))
                     * self.TRANSACTION_COST
                 ).alias("trans_cost")
             ]
@@ -228,9 +233,9 @@ class BackTester:
 if __name__ == "__main__":
     factors_df = pl.read_csv("factors.csv")
     backtester = BackTester(factors_df)
-    trade_info = backtester._compute_trade_statistics(220, 2.8)
-    backtester.plot_returns(trade_info)
-    backtester.print_trade_summary_stats(220, 2.8)
+    backtester._z_score_strategy(220, 2.8)
+    # trade_info = backtester._compute_trade_statistics(220, 2.8)
+    # backtester.print_trade_summary_stats(220, 2.8)
     # rolling_windows = (
     #     [i for i in range(10, 101, 10)]
     #     + [i for i in range(100, 501, 20)]
