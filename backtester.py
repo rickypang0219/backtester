@@ -231,7 +231,7 @@ class BackTester:
         ax.set_xlabel("Rolling Windows")
         ax.set_ylabel("Multipliers")
         ax.set_title("Heatmap of Params Set")
-        # plt.show()
+        plt.show()
 
     def plot_returns(self, trade_info: pl.DataFrame) -> None:
         trade_info = self._convert_humanized_timestamp(trade_info)
