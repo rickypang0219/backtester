@@ -35,7 +35,7 @@ def update_positions(
 
 class BackTester:
     def __init__(self, factors_df: pl.DataFrame):
-        self.factors = factors_df
+        self.factors = factors_df.drop_nulls().sort("timestamp")
         self.TRANSACTION_COST: float = 0.06 / 100
 
     def _print_factors(self) -> None:
@@ -63,6 +63,8 @@ class BackTester:
             self.factors["factor"].rolling_std(window_size=rolling_window).to_numpy()
         )
         z_score = (self.factors["factor"].to_numpy() - rolling_mean) / rolling_std
+
+        z_score = np.where(rolling_std == 0, 0, z_score)
 
         trade_info = trade_info.with_columns(
             self.factors["timestamp"].alias("timestamp")
@@ -149,6 +151,32 @@ class BackTester:
             return (mean / sd) * np.sqrt(trading_days)
         return 0
 
+    def compute_information_ratio(
+        self, trade_info: pl.DataFrame, trading_days: int
+    ) -> float:
+        trade_info = self._convert_humanized_timestamp(trade_info)
+        trade_info = (
+            trade_info.with_columns(pl.col("humanized_timestamp").dt.truncate("1d"))
+            .group_by("humanized_timestamp")
+            .agg(
+                [
+                    pl.col("PnL").sum().alias("aggPnL"),
+                    pl.col("returns").sum().alias("aggReturns"),
+                ]
+            )
+        )
+        agg_pnl = trade_info["aggPnL"].drop_nulls().to_numpy()
+        agg_returns = trade_info["aggReturns"].drop_nulls().to_numpy()
+
+        if (len(agg_pnl) != 0) and (len(agg_returns) != 0):
+            excess = agg_pnl - agg_returns
+            mean = np.mean(excess)
+            sd = np.std(excess, ddof=1)
+            if sd == 0:
+                return 0
+            return (mean / sd) * np.sqrt(trading_days)
+        return 0
+
     def _compute_beta(self, trade_info: pl.DataFrame):
         strategy = trade_info["PnL"].drop_nulls().to_numpy()
         benchmark = trade_info["returns"].drop_nulls().to_numpy().reshape(-1, 1)
@@ -174,6 +202,7 @@ class BackTester:
     def print_trade_summary_stats(self, rolling_window: int, multiplier: float) -> None:
         trade_info = self._compute_trade_statistics(rolling_window, multiplier)
         sharpe: float = self.compute_sharpe_ratio(trade_info, 365)
+        ir: float = self.compute_information_ratio(trade_info, 365)
         beta = self._compute_beta(trade_info)
         mdd = self._compute_max_drawdown(trade_info)
         ls_ratio = self._compute_long_short_ratio(trade_info)
@@ -182,7 +211,8 @@ class BackTester:
             f'Params Set {rolling_window, multiplier} \n'
             f"Strategy Cum PnL: {trade_info['strategy_cumPnL'][-1]:.3f} \n"
             f"Benchmark Cum PnL {trade_info['benchmark_cumPnL'][-1]:.3f} \n"
-            f"Annualized Sharpe: {sharpe:.3f} \n"
+            f"Annualized Sharpe Ratio: {sharpe:.3f} \n"
+            f"Annualized Information Ratio: {ir:.3f} \n"
             f"Market Beta: {beta:.3f} \n"
             f"Maximum Drawdown: {mdd * 100:.0f}% \n"
             f"Long Short Ratio: {ls_ratio:.3f} \n"
@@ -215,8 +245,8 @@ class BackTester:
         )
         rolling_windows_expanded = np.array(rolling_windows_expanded).flatten()
         multipliers_expanded = np.array(multipliers_expanded).flatten()
-        xticklabels = list(map(str, rolling_windows_expanded))
-        yticklabels = list(map(str, multipliers_expanded))
+        xticklabels = [f"{x:.0f}" for x in rolling_windows_expanded]
+        yticklabels = [f"{y:.1f}" for y in multipliers_expanded]
         ax = sns.heatmap(
             z,
             annot=True,
@@ -227,6 +257,7 @@ class BackTester:
             vmin=-2,  # Set minimum bound of color scale
             vmax=3.5,  # Set maximum bound of color scale
             center=1,  # Set midpoint of the color scale
+            annot_kws={"size": 5},
         )
         ax.set_xlabel("Rolling Windows")
         ax.set_ylabel("Multipliers")
@@ -254,16 +285,18 @@ class BackTester:
 
 
 if __name__ == "__main__":
-    factors_df = pl.read_csv("factors.csv")
+    # factors_df = pl.read_csv("factors.csv")
+    factors_df = pl.read_csv("../dataset/darius_supply_held_data.csv")
     backtester = BackTester(factors_df)
     # backtester._z_score_strategy(220, 2.8)
-    trade_info = backtester._compute_trade_statistics(220, 2.8)
-    backtester.print_trade_summary_stats(220, 2.8)
-    rolling_windows = (
+    trade_info = backtester._compute_trade_statistics(525, 1.7)
+    backtester.print_trade_summary_stats(525, 1.7)
+    backtester.plot_returns(trade_info)
+    rolling_windows = np.array(
         [i for i in range(10, 101, 10)]
         + [i for i in range(100, 501, 20)]
         + [i for i in range(500, 1001, 25)]
     )
     rolling_windows = np.array(rolling_windows)
-    multipliers = np.arange(0, 4.1, 0.2)
+    multipliers = np.arange(0.2, 4.2, 0.2)
     backtester.optimize_params_and_plot_heatmap(rolling_windows, multipliers)
