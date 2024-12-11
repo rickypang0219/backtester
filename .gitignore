@@ -1,4 +1,10 @@
 pi_coinbase.csv
 example.csv
 .DS_Store
+.venv
+*/**__pycache__
+z_score_position.csv
+vector_backtest.py
+.git
+coinbase_pi_trade_info.csv
 # factors.csv
